@@ -1,0 +1,37 @@
+[package]
+name = "chromerunner"
+version = "0.2.0"
+edition = "2021"
+description = "Chrome, Firefox, and Safari browser automation via CDP, WebDriver BiDi, and WebDriver"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tempfile = "3"
+tracing = "0.1"
+
+# WebSocket support — pulled in by chrome and/or firefox features
+fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"], optional = true }
+
+# CLI-only
+clap = { version = "4", features = ["derive"], optional = true }
+anyhow = { version = "1", optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"], optional = true }
+
+[features]
+default = ["chrome", "firefox", "safari", "cli"]
+chrome  = ["dep:fastwebsockets"]
+firefox = ["dep:fastwebsockets"]
+safari  = []
+cli     = ["dep:clap", "dep:anyhow", "dep:tracing-subscriber"]
+
+[[bin]]
+name = "chromerunner"
+required-features = ["cli"]
