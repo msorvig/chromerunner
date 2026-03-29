@@ -41,6 +41,12 @@ pub fn find_free_port() -> Result<u16> {
 
 #[cfg(feature = "chrome")]
 pub fn launch_chrome(port: u16, headless: bool) -> Result<ChildGuard> {
+    launch_chrome_with_args(port, headless, &[])
+}
+
+/// Launch Chrome with additional command-line arguments.
+#[cfg(feature = "chrome")]
+pub fn launch_chrome_with_args(port: u16, headless: bool, extra_args: &[&str]) -> Result<ChildGuard> {
     let bin = find_chrome().ok_or_else(|| Error::LaunchFailed("Chrome not found".into()))?;
     info!(path = %bin.display(), port, headless, "Launching Chrome");
     let user_data_dir = TempDir::new()?;
@@ -61,6 +67,9 @@ pub fn launch_chrome(port: u16, headless: bool) -> Result<ChildGuard> {
         .stderr(Stdio::null());
     if headless {
         cmd.arg("--headless=new");
+    }
+    for arg in extra_args {
+        cmd.arg(arg);
     }
     cmd.arg("about:blank");
 

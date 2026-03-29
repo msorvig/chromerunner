@@ -64,6 +64,19 @@ pub trait BrowserApi: Sized {
         headless: bool,
     ) -> impl std::future::Future<Output = Result<Self>> + Send;
 
+    /// Launch with additional browser-specific command-line arguments.
+    ///
+    /// The arguments are passed directly to the browser process. What they
+    /// mean depends on the backend:
+    ///
+    /// - **Chrome**: flags like `"--disable-gpu"`, `"--window-size=800,600"`
+    /// - **Firefox**: passed via `moz:firefoxOptions.args`
+    /// - **Safari**: ignored (safaridriver has no extra arg support)
+    fn launch_with_args(
+        headless: bool,
+        extra_args: &[&str],
+    ) -> impl std::future::Future<Output = Result<Self>> + Send;
+
     /// Open a new tab and navigate to `url`.
     fn new_tab(
         &self,

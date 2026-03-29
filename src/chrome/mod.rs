@@ -38,9 +38,14 @@ pub struct Tab {
 impl Browser {
     /// Launch a new Chrome instance.
     pub async fn launch(headless: bool) -> Result<Self> {
+        Self::launch_with_args(headless, &[]).await
+    }
+
+    /// Launch a new Chrome instance with additional command-line arguments.
+    pub async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> {
         info!(headless, "Chrome: launching");
         let port = launcher::find_free_port()?;
-        let process = launcher::launch_chrome(port, headless)?;
+        let process = launcher::launch_chrome_with_args(port, headless, extra_args)?;
         let ws_url = wait_for_chrome(port).await?;
         let cdp = CdpClient::connect(&ws_url).await?;
         info!("Chrome: ready");
@@ -307,6 +312,7 @@ impl BrowserApi for Browser {
     type Tab = Tab;
 
     async fn launch(headless: bool) -> Result<Self> { Self::launch(headless).await }
+    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> { Self::launch_with_args(headless, extra_args).await }
     async fn new_tab(&self, url: &str) -> Result<Tab> { self.new_tab(url).await }
     async fn new_window(&self, url: &str) -> Result<Tab> { self.new_window(url).await }
     async fn list_targets(&self) -> Result<Vec<TargetInfo>> { self.list_targets().await }

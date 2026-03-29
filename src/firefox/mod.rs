@@ -42,6 +42,14 @@ pub struct Tab {
 impl Browser {
     /// Launch Firefox via geckodriver. Requires `geckodriver` on PATH.
     pub async fn launch(headless: bool) -> Result<Self> {
+        Self::launch_with_args(headless, &[]).await
+    }
+
+    /// Launch Firefox with additional command-line arguments.
+    ///
+    /// Arguments are passed via `moz:firefoxOptions.args` in the session
+    /// capabilities (e.g. `"-width"`, `"800"`).
+    pub async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> {
         info!(headless, "Firefox: launching");
         let port = launcher::find_free_port()?;
         let ws_port = launcher::find_free_port()?;
@@ -55,6 +63,9 @@ impl Browser {
         let mut ff_args: Vec<String> = Vec::new();
         if headless {
             ff_args.push("-headless".to_string());
+        }
+        for arg in extra_args {
+            ff_args.push(arg.to_string());
         }
 
         let mut ff_options = json!({
@@ -324,6 +335,7 @@ impl BrowserApi for Browser {
     type Tab = Tab;
 
     async fn launch(headless: bool) -> Result<Self> { Self::launch(headless).await }
+    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> { Self::launch_with_args(headless, extra_args).await }
     async fn new_tab(&self, url: &str) -> Result<Tab> { self.new_tab(url).await }
     async fn new_window(&self, url: &str) -> Result<Tab> { self.new_window(url).await }
     async fn list_targets(&self) -> Result<Vec<TargetInfo>> { self.list_targets().await }

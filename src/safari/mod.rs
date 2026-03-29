@@ -55,7 +55,16 @@ impl Browser {
     /// Requires `safaridriver --enable` to have been run once (needs user auth).
     /// Safari does not support headless mode — `headless` is accepted but ignored.
     pub async fn launch(headless: bool) -> Result<Self> {
+        Self::launch_with_args(headless, &[]).await
+    }
+
+    /// Launch with extra arguments (ignored on Safari — safaridriver has no
+    /// extra arg support).
+    pub async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> {
         let _ = headless; // Safari has no headless mode
+        if !extra_args.is_empty() {
+            tracing::warn!(args = ?extra_args, "Safari: extra_args ignored (not supported by safaridriver)");
+        }
         info!("Safari: launching (headless not supported)");
         let port = launcher::find_free_port()?;
         let driver = launcher::launch_safaridriver(port)?;
@@ -335,6 +344,7 @@ impl BrowserApi for Browser {
     type Tab = Tab;
 
     async fn launch(headless: bool) -> Result<Self> { Self::launch(headless).await }
+    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> { Self::launch_with_args(headless, extra_args).await }
     async fn new_tab(&self, url: &str) -> Result<Tab> { self.new_tab(url).await }
     async fn new_window(&self, url: &str) -> Result<Tab> { self.new_window(url).await }
     async fn list_targets(&self) -> Result<Vec<TargetInfo>> { self.list_targets().await }
