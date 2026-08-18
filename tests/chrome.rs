@@ -19,10 +19,18 @@ async fn start_local_server() -> String {
         .unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         loop {
             if let Ok((mut stream, _)) = listener.accept().await {
                 tokio::spawn(async move {
+                    // Read the request before responding: replying and
+                    // closing while request bytes are still in flight makes
+                    // the kernel RST the connection, discarding our
+                    // response. (Chrome also opens speculative preconnects
+                    // that it closes without sending anything; the read
+                    // simply returns 0 for those.)
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
                     let body = "<html><body></body></html>";
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\

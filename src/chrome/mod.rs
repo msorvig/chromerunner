@@ -136,7 +136,17 @@ impl Browser {
             cdp: self.cdp.clone(),
             on_navigate_scripts: std::sync::Mutex::new(Vec::new()),
         };
-        tab.wait_for_load().await?;
+        // A fresh target starts at about:blank, whose readyState is already
+        // "complete", so a plain readyState poll can declare the tab loaded
+        // before the requested navigation ever commits -- and right after a
+        // cold launch Chrome occasionally drops that initial navigation
+        // altogether, leaving the tab blank forever. Wait for the requested
+        // document instead, re-issuing the navigation if it went missing.
+        if url == "about:blank" {
+            tab.wait_for_load().await?;
+        } else {
+            tab.wait_for_initial_navigation(url).await?;
+        }
         Ok(tab)
     }
 }
@@ -277,6 +287,76 @@ impl Tab {
         for script in &scripts {
             let _ = self.evaluate(script).await;
         }
+    }
+
+    /// Wait until the tab has left about:blank and finished loading,
+    /// re-issuing the navigation if the initial one was dropped.
+    ///
+    /// Used after `Target.createTarget { url }`: the create call returns as
+    /// soon as the target exists, with no synchronization against the
+    /// navigation it requested. `document.readyState` alone cannot detect
+    /// this (about:blank is "complete"), hence the explicit
+    /// not-about:blank condition and the retry.
+    async fn wait_for_initial_navigation(&self, url: &str) -> Result<()> {
+        const POLLS_PER_ATTEMPT: u32 = 40; // 40 x 50ms = 2s per attempt
+        for attempt in 0..5 {
+            if attempt > 0 {
+                debug!(url, attempt, "Chrome: initial navigation stalled, re-issuing");
+                // The stalled navigation must be stopped first: Chrome can
+                // wedge a load whose socket was flushed under it (e.g. by a
+                // startup cert-verifier update), and a Page.navigate issued
+                // on top of the wedged loader never resolves its response.
+                let _ = self
+                    .cdp
+                    .send("Page.stopLoading", json!({}), Some(&self.session_id))
+                    .await;
+                // Bound the navigate command: if the loader wedges anyway,
+                // give up on this attempt rather than waiting out the full
+                // CDP command timeout.
+                let navigate = self.cdp.send(
+                    "Page.navigate",
+                    json!({ "url": url }),
+                    Some(&self.session_id),
+                );
+                match tokio::time::timeout(std::time::Duration::from_secs(5), navigate).await {
+                    Ok(result) => {
+                        result?;
+                    }
+                    Err(_) => continue, // stop-and-retry once more
+                }
+            } else {
+                // Page.stopLoading requires the Page domain.
+                let _ = self
+                    .cdp
+                    .send("Page.enable", json!({}), Some(&self.session_id))
+                    .await;
+            }
+            for _ in 0..POLLS_PER_ATTEMPT {
+                if let Ok(r) = self
+                    .cdp
+                    .send(
+                        "Runtime.evaluate",
+                        json!({
+                            "expression":
+                                "document.readyState === 'complete' && location.href !== 'about:blank'",
+                            "returnByValue": true,
+                        }),
+                        Some(&self.session_id),
+                    )
+                    .await
+                {
+                    if r.get("result").and_then(|r| r.get("value")).and_then(|v| v.as_bool())
+                        == Some(true)
+                    {
+                        return Ok(());
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+        Err(Error::Timeout(format!(
+            "initial navigation to {url} did not complete"
+        )))
     }
 
     async fn wait_for_load(&self) -> Result<()> {
