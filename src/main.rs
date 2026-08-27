@@ -41,6 +41,13 @@ enum Commands {
     Version,
     /// Navigate to a URL and print page title
     Navigate { url: String },
+    /// Load a URL and print what the page writes to the console
+    Console {
+        url: String,
+        /// Keep the page open this long instead of returning once it settles
+        #[arg(long, short = 's')]
+        seconds: Option<u64>,
+    },
     /// Evaluate a JavaScript expression
     Eval {
         expression: String,
@@ -85,6 +92,51 @@ async fn run<B: BrowserApi>(cli: Cli) -> anyhow::Result<()> {
             let browser = B::launch(cli.headless).await?;
             let v = browser.version().await?;
             println!("{}", serde_json::to_string_pretty(&v)?);
+            browser.close().await?;
+        }
+        // Chrome only: the console capture is built on CDP, which the other
+        // backends do not speak.
+        #[cfg(feature = "chrome")]
+        Commands::Console { url, seconds } => {
+            let browser = chromerunner::chrome::Browser::launch(cli.headless).await?;
+            let tab = browser.new_tab("about:blank").await?;
+
+            // Started before navigating: Chrome reports these as they happen and
+            // keeps no history, so a capture armed afterwards misses the startup
+            // errors that are usually the point.
+            let mut console = tab.capture_console().await?;
+            tab.navigate(&url).await?;
+
+            let mut seen = Vec::new();
+            match seconds {
+                // Fixed duration, for a page that keeps talking.
+                Some(seconds) => {
+                    for _ in 0..seconds {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        seen.extend(console.drain());
+                    }
+                }
+                // navigate() returns when the load event fires, which for a wasm
+                // page is before the module has run -- so the interesting output
+                // is still to come. Reading until it falls quiet returns as soon
+                // as there is nothing more to say, without guessing a duration.
+                None => {
+                    let mut quiet = 0;
+                    while quiet < 4 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let batch = console.drain();
+                        quiet = if batch.is_empty() { quiet + 1 } else { 0 };
+                        seen.extend(batch);
+                    }
+                }
+            }
+
+            if seen.is_empty() {
+                println!("(the page wrote nothing to the console)");
+            }
+            for message in &seen {
+                println!("{}: {}", message.level, message.text);
+            }
             browser.close().await?;
         }
         Commands::Navigate { url } => {
