@@ -70,6 +70,13 @@ pub fn launch_chrome_with_args(
         .arg("--disable-translate")
         .arg("--metrics-recording-only")
         .arg("--mute-audio")
+        // Keep the cookie store off the OS keyring. Chrome encrypts cookies via
+        // OSCrypt, and its network-service cookie load blocks on that backend --
+        // on Linux a locked gnome-keyring with no prompter available (headless,
+        // no DISPLAY) never returns, so every cookie-bearing request, including
+        // every navigation, hangs forever.
+        .arg("--password-store=basic")
+        .arg("--use-mock-keychain")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if headless {
