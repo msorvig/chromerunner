@@ -14,9 +14,7 @@ async fn launch() -> Browser {
 /// Start a minimal localhost HTTP server and return its base URL.
 /// Required for tests that need a real origin (localStorage, BroadcastChannel).
 async fn start_local_server() -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -332,10 +330,7 @@ async fn test_list_targets() {
     browser.new_tab("about:blank").await.unwrap();
 
     let targets = browser.list_targets().await.unwrap();
-    let pages: Vec<_> = targets
-        .iter()
-        .filter(|t| t.target_type == "page")
-        .collect();
+    let pages: Vec<_> = targets.iter().filter(|t| t.target_type == "page").collect();
 
     assert!(
         pages.len() >= 2,
@@ -468,10 +463,7 @@ async fn test_shared_localstorage_across_tabs() {
         .await
         .unwrap();
 
-    let result = tab2
-        .evaluate("localStorage.getItem('k')")
-        .await
-        .unwrap();
+    let result = tab2.evaluate("localStorage.getItem('k')").await.unwrap();
     assert_eq!(result.value, serde_json::json!("from_tab1"));
 
     browser.close().await.unwrap();
@@ -517,9 +509,7 @@ async fn test_raw_cdp_target_info() {
         .await
         .unwrap();
 
-    let url = result["frameTree"]["frame"]["url"]
-        .as_str()
-        .unwrap_or("");
+    let url = result["frameTree"]["frame"]["url"].as_str().unwrap_or("");
     assert_eq!(url, "about:blank");
 
     browser.close().await.unwrap();

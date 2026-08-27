@@ -161,17 +161,12 @@ impl BidiClient {
                             }
                         }
                         "event" => {
-                            if let Some(method) =
-                                value.get("method").and_then(|m| m.as_str())
-                            {
+                            if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
                                 debug!(method, "BiDi event");
                                 trace!(event = %value, "BiDi event raw");
                                 let event = BidiEvent {
                                     method: method.to_string(),
-                                    params: value
-                                        .get("params")
-                                        .cloned()
-                                        .unwrap_or(Value::Null),
+                                    params: value.get("params").cloned().unwrap_or(Value::Null),
                                 };
                                 let _ = shared.events.send(event);
                             }

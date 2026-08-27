@@ -114,8 +114,7 @@ impl Browser {
     }
 
     pub async fn version(&self) -> Result<Value> {
-        let resp =
-            http::get_json("127.0.0.1", self.port, "/status").await?;
+        let resp = http::get_json("127.0.0.1", self.port, "/status").await?;
         Ok(resp["value"].clone())
     }
 
@@ -241,9 +240,7 @@ impl Tab {
 
         // WebDriver wraps errors in value.error
         if let Some(err) = resp["value"].get("error") {
-            let message = resp["value"]["message"]
-                .as_str()
-                .unwrap_or("unknown error");
+            let message = resp["value"]["message"].as_str().unwrap_or("unknown error");
             if err.as_str() == Some("javascript error") {
                 return Err(Error::JavaScript(message.to_string()));
             }
@@ -343,25 +340,57 @@ impl Tab {
 impl BrowserApi for Browser {
     type Tab = Tab;
 
-    async fn launch(headless: bool) -> Result<Self> { Self::launch(headless).await }
-    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> { Self::launch_with_args(headless, extra_args).await }
-    async fn new_tab(&self, url: &str) -> Result<Tab> { self.new_tab(url).await }
-    async fn new_window(&self, url: &str) -> Result<Tab> { self.new_window(url).await }
-    async fn list_targets(&self) -> Result<Vec<TargetInfo>> { self.list_targets().await }
-    async fn version(&self) -> Result<Value> { self.version().await }
-    async fn close(self) -> Result<()> { self.close().await }
+    async fn launch(headless: bool) -> Result<Self> {
+        Self::launch(headless).await
+    }
+    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> {
+        Self::launch_with_args(headless, extra_args).await
+    }
+    async fn new_tab(&self, url: &str) -> Result<Tab> {
+        self.new_tab(url).await
+    }
+    async fn new_window(&self, url: &str) -> Result<Tab> {
+        self.new_window(url).await
+    }
+    async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
+        self.list_targets().await
+    }
+    async fn version(&self) -> Result<Value> {
+        self.version().await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
 }
 
 impl TabApi for Tab {
-    fn target_id(&self) -> &str { self.target_id() }
-    async fn navigate(&self, url: &str) -> Result<()> { self.navigate(url).await }
-    async fn evaluate(&self, expr: &str) -> Result<JsResult> { self.evaluate(expr).await }
-    async fn inject_preload_script(&self, src: &str) -> Result<()> { self.inject_preload_script(src).await }
-    async fn inject_on_navigate(&self, src: &str) -> Result<()> { self.inject_on_navigate(src).await }
-    async fn url(&self) -> Result<String> { self.url().await }
-    async fn title(&self) -> Result<String> { self.title().await }
-    async fn set_bounds(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> { self.set_bounds(x, y, w, h).await }
-    async fn close(self) -> Result<()> { self.close().await }
+    fn target_id(&self) -> &str {
+        self.target_id()
+    }
+    async fn navigate(&self, url: &str) -> Result<()> {
+        self.navigate(url).await
+    }
+    async fn evaluate(&self, expr: &str) -> Result<JsResult> {
+        self.evaluate(expr).await
+    }
+    async fn inject_preload_script(&self, src: &str) -> Result<()> {
+        self.inject_preload_script(src).await
+    }
+    async fn inject_on_navigate(&self, src: &str) -> Result<()> {
+        self.inject_on_navigate(src).await
+    }
+    async fn url(&self) -> Result<String> {
+        self.url().await
+    }
+    async fn title(&self) -> Result<String> {
+        self.title().await
+    }
+    async fn set_bounds(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        self.set_bounds(x, y, w, h).await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
 }
 
 async fn wait_for_driver(port: u16) -> Result<()> {
@@ -371,5 +400,7 @@ async fn wait_for_driver(port: u16) -> Result<()> {
             return Ok(());
         }
     }
-    Err(Error::Timeout("safaridriver did not start within 5s".into()))
+    Err(Error::Timeout(
+        "safaridriver did not start within 5s".into(),
+    ))
 }

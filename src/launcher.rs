@@ -46,14 +46,21 @@ pub fn launch_chrome(port: u16, headless: bool) -> Result<ChildGuard> {
 
 /// Launch Chrome with additional command-line arguments.
 #[cfg(feature = "chrome")]
-pub fn launch_chrome_with_args(port: u16, headless: bool, extra_args: &[&str]) -> Result<ChildGuard> {
+pub fn launch_chrome_with_args(
+    port: u16,
+    headless: bool,
+    extra_args: &[&str],
+) -> Result<ChildGuard> {
     let bin = find_chrome().ok_or_else(|| Error::LaunchFailed("Chrome not found".into()))?;
     info!(path = %bin.display(), port, headless, "Launching Chrome");
     let user_data_dir = TempDir::new()?;
 
     let mut cmd = Command::new(&bin);
     cmd.arg(format!("--remote-debugging-port={}", port))
-        .arg(format!("--user-data-dir={}", user_data_dir.path().display()))
+        .arg(format!(
+            "--user-data-dir={}",
+            user_data_dir.path().display()
+        ))
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
         .arg("--disable-background-networking")
@@ -119,8 +126,7 @@ pub fn launch_geckodriver(port: u16, ws_port: u16, headless: bool) -> Result<Chi
     cmd.arg("--host").arg("127.0.0.1");
     cmd.arg("--port").arg(port.to_string());
     cmd.arg("--websocket-port").arg(ws_port.to_string());
-    cmd.stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
 
     let _ = headless; // handled via capabilities
 
@@ -143,14 +149,15 @@ pub fn launch_geckodriver(port: u16, ws_port: u16, headless: bool) -> Result<Chi
 pub fn launch_safaridriver(port: u16) -> Result<ChildGuard> {
     let bin = PathBuf::from("/usr/bin/safaridriver");
     if !bin.exists() {
-        return Err(Error::LaunchFailed("safaridriver not found at /usr/bin/safaridriver".into()));
+        return Err(Error::LaunchFailed(
+            "safaridriver not found at /usr/bin/safaridriver".into(),
+        ));
     }
     info!(port, "Launching safaridriver");
 
     let mut cmd = Command::new(&bin);
     cmd.arg("--port").arg(port.to_string());
-    cmd.stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
 
     let process = cmd
         .spawn()

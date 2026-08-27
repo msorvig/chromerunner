@@ -95,9 +95,7 @@ impl Browser {
 
         // Check for error response from geckodriver
         if let Some(err) = resp.get("value").and_then(|v| v.get("error")) {
-            let message = resp["value"]["message"]
-                .as_str()
-                .unwrap_or("unknown error");
+            let message = resp["value"]["message"].as_str().unwrap_or("unknown error");
             return Err(Error::LaunchFailed(format!(
                 "geckodriver session error: {}: {}",
                 err, message
@@ -130,8 +128,7 @@ impl Browser {
     }
 
     pub async fn version(&self) -> Result<Value> {
-        let resp =
-            http::get_json("127.0.0.1", self.driver_port, "/status").await?;
+        let resp = http::get_json("127.0.0.1", self.driver_port, "/status").await?;
         Ok(resp["value"].clone())
     }
 
@@ -144,10 +141,7 @@ impl Browser {
     }
 
     pub async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
-        let result = self
-            .bidi
-            .send("browsingContext.getTree", json!({}))
-            .await?;
+        let result = self.bidi.send("browsingContext.getTree", json!({})).await?;
         let contexts = result["contexts"].as_array().cloned().unwrap_or_default();
         Ok(contexts
             .iter()
@@ -182,10 +176,7 @@ impl Browser {
     async fn create_context(&self, ctx_type: &str, url: &str) -> Result<Tab> {
         let result = self
             .bidi
-            .send(
-                "browsingContext.create",
-                json!({ "type": ctx_type }),
-            )
+            .send("browsingContext.create", json!({ "type": ctx_type }))
             .await?;
         let context_id = result["context"]
             .as_str()
@@ -251,10 +242,7 @@ impl Tab {
         if result.get("exceptionDetails").is_some() {
             let text = result["exceptionDetails"]["text"]
                 .as_str()
-                .or_else(|| {
-                    result["exceptionDetails"]["exception"]["value"]
-                        .as_str()
-                })
+                .or_else(|| result["exceptionDetails"]["exception"]["value"].as_str())
                 .unwrap_or("unknown error");
             return Err(Error::JavaScript(text.to_string()));
         }
@@ -334,25 +322,57 @@ impl Tab {
 impl BrowserApi for Browser {
     type Tab = Tab;
 
-    async fn launch(headless: bool) -> Result<Self> { Self::launch(headless).await }
-    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> { Self::launch_with_args(headless, extra_args).await }
-    async fn new_tab(&self, url: &str) -> Result<Tab> { self.new_tab(url).await }
-    async fn new_window(&self, url: &str) -> Result<Tab> { self.new_window(url).await }
-    async fn list_targets(&self) -> Result<Vec<TargetInfo>> { self.list_targets().await }
-    async fn version(&self) -> Result<Value> { self.version().await }
-    async fn close(self) -> Result<()> { self.close().await }
+    async fn launch(headless: bool) -> Result<Self> {
+        Self::launch(headless).await
+    }
+    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> {
+        Self::launch_with_args(headless, extra_args).await
+    }
+    async fn new_tab(&self, url: &str) -> Result<Tab> {
+        self.new_tab(url).await
+    }
+    async fn new_window(&self, url: &str) -> Result<Tab> {
+        self.new_window(url).await
+    }
+    async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
+        self.list_targets().await
+    }
+    async fn version(&self) -> Result<Value> {
+        self.version().await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
 }
 
 impl TabApi for Tab {
-    fn target_id(&self) -> &str { self.target_id() }
-    async fn navigate(&self, url: &str) -> Result<()> { self.navigate(url).await }
-    async fn evaluate(&self, expr: &str) -> Result<JsResult> { self.evaluate(expr).await }
-    async fn inject_preload_script(&self, src: &str) -> Result<()> { self.inject_preload_script(src).await }
-    async fn inject_on_navigate(&self, src: &str) -> Result<()> { self.inject_on_navigate(src).await }
-    async fn url(&self) -> Result<String> { self.url().await }
-    async fn title(&self) -> Result<String> { self.title().await }
-    async fn set_bounds(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> { self.set_bounds(x, y, w, h).await }
-    async fn close(self) -> Result<()> { self.close().await }
+    fn target_id(&self) -> &str {
+        self.target_id()
+    }
+    async fn navigate(&self, url: &str) -> Result<()> {
+        self.navigate(url).await
+    }
+    async fn evaluate(&self, expr: &str) -> Result<JsResult> {
+        self.evaluate(expr).await
+    }
+    async fn inject_preload_script(&self, src: &str) -> Result<()> {
+        self.inject_preload_script(src).await
+    }
+    async fn inject_on_navigate(&self, src: &str) -> Result<()> {
+        self.inject_on_navigate(src).await
+    }
+    async fn url(&self) -> Result<String> {
+        self.url().await
+    }
+    async fn title(&self) -> Result<String> {
+        self.title().await
+    }
+    async fn set_bounds(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        self.set_bounds(x, y, w, h).await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
 }
 
 /// Convert a BiDi remote value to a serde_json::Value.

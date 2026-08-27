@@ -19,7 +19,8 @@ use crate::error::{Error, Result};
 use crate::launcher;
 use crate::transport::http;
 use crate::types::{BrowserApi, JsResult, TabApi, TargetInfo};
-use cdp::CdpClient;
+use cdp::{CdpClient, CdpEvent};
+use tokio::sync::broadcast;
 
 /// Chrome browser instance.
 pub struct Browser {
@@ -151,7 +152,127 @@ impl Browser {
     }
 }
 
+/// Something the page said, as Chrome reports it.
+#[derive(Debug, Clone)]
+pub struct ConsoleMessage {
+    /// `log`, `warning`, `error`, `exception`, and so on.
+    pub level: String,
+    pub text: String,
+}
+
+/// Console output and page errors collected from a tab.
+///
+/// Taken from Chrome's own events rather than by overriding `console` in the
+/// page, so it also carries what never goes through `console` at all: uncaught
+/// exceptions, failed requests, CSP violations, and the errors a failed
+/// WebAssembly instantiation produces. Those are usually the ones that matter,
+/// since a page that dies on startup has no chance to log anything itself.
+pub struct ConsoleCapture {
+    events: broadcast::Receiver<CdpEvent>,
+    session_id: String,
+}
+
+impl ConsoleCapture {
+    /// Everything said since the last call.
+    ///
+    /// Nothing is buffered on Chrome's side, so a capture has to be started
+    /// before the page is navigated to be sure of catching its first words.
+    pub fn drain(&mut self) -> Vec<ConsoleMessage> {
+        let mut messages = Vec::new();
+        while let Ok(event) = self.events.try_recv() {
+            if event.session_id.as_deref() != Some(self.session_id.as_str()) {
+                continue;
+            }
+            if let Some(message) = Self::message_of(&event) {
+                messages.push(message);
+            }
+        }
+        messages
+    }
+
+    fn message_of(event: &CdpEvent) -> Option<ConsoleMessage> {
+        match event.method.as_str() {
+            // console.log and friends. The arguments arrive as separate values,
+            // already rendered by Chrome when they are not primitives.
+            "Runtime.consoleAPICalled" => {
+                let level = event.params.get("type")?.as_str().unwrap_or("log");
+                let text = event
+                    .params
+                    .get("args")?
+                    .as_array()?
+                    .iter()
+                    .map(|arg| {
+                        arg.get("value")
+                            .and_then(|v| v.as_str().map(str::to_owned))
+                            .or_else(|| {
+                                arg.get("description")
+                                    .and_then(|d| d.as_str().map(str::to_owned))
+                            })
+                            .or_else(|| arg.get("value").map(|v| v.to_string()))
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Some(ConsoleMessage {
+                    level: level.to_string(),
+                    text,
+                })
+            }
+            // An exception nothing caught.
+            "Runtime.exceptionThrown" => {
+                let details = event.params.get("exceptionDetails")?;
+                let text = details
+                    .get("exception")
+                    .and_then(|e| e.get("description"))
+                    .and_then(|d| d.as_str())
+                    .or_else(|| details.get("text").and_then(|t| t.as_str()))
+                    .unwrap_or("uncaught exception");
+                Some(ConsoleMessage {
+                    level: "exception".to_string(),
+                    text: text.to_string(),
+                })
+            }
+            // Chrome's own log: failed requests, CSP, deprecations.
+            "Log.entryAdded" => {
+                let entry = event.params.get("entry")?;
+                let level = entry
+                    .get("level")
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("info");
+                let text = entry.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                let url = entry.get("url").and_then(|u| u.as_str());
+                Some(ConsoleMessage {
+                    level: level.to_string(),
+                    text: match url {
+                        Some(url) => format!("{text} ({url})"),
+                        None => text.to_string(),
+                    },
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Tab {
+    /// Starts collecting console output and page errors from this tab.
+    ///
+    /// Enables the two domains that report them, so call it before navigating:
+    /// Chrome sends these as they happen and keeps no history.
+    pub async fn capture_console(&self) -> Result<ConsoleCapture> {
+        let capture = ConsoleCapture {
+            events: self.cdp.subscribe(),
+            session_id: self.session_id.clone(),
+        };
+        self.cdp
+            .send("Runtime.enable", json!({}), Some(&self.session_id))
+            .await?;
+        self.cdp
+            .send("Log.enable", json!({}), Some(&self.session_id))
+            .await?;
+        Ok(capture)
+    }
+
     pub fn target_id(&self) -> &str {
         &self.target_id
     }
@@ -301,7 +422,10 @@ impl Tab {
         const POLLS_PER_ATTEMPT: u32 = 40; // 40 x 50ms = 2s per attempt
         for attempt in 0..5 {
             if attempt > 0 {
-                debug!(url, attempt, "Chrome: initial navigation stalled, re-issuing");
+                debug!(
+                    url,
+                    attempt, "Chrome: initial navigation stalled, re-issuing"
+                );
                 // The stalled navigation must be stopped first: Chrome can
                 // wedge a load whose socket was flushed under it (e.g. by a
                 // startup cert-verifier update), and a Page.navigate issued
@@ -391,25 +515,57 @@ impl Tab {
 impl BrowserApi for Browser {
     type Tab = Tab;
 
-    async fn launch(headless: bool) -> Result<Self> { Self::launch(headless).await }
-    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> { Self::launch_with_args(headless, extra_args).await }
-    async fn new_tab(&self, url: &str) -> Result<Tab> { self.new_tab(url).await }
-    async fn new_window(&self, url: &str) -> Result<Tab> { self.new_window(url).await }
-    async fn list_targets(&self) -> Result<Vec<TargetInfo>> { self.list_targets().await }
-    async fn version(&self) -> Result<Value> { self.version().await }
-    async fn close(self) -> Result<()> { self.close().await }
+    async fn launch(headless: bool) -> Result<Self> {
+        Self::launch(headless).await
+    }
+    async fn launch_with_args(headless: bool, extra_args: &[&str]) -> Result<Self> {
+        Self::launch_with_args(headless, extra_args).await
+    }
+    async fn new_tab(&self, url: &str) -> Result<Tab> {
+        self.new_tab(url).await
+    }
+    async fn new_window(&self, url: &str) -> Result<Tab> {
+        self.new_window(url).await
+    }
+    async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
+        self.list_targets().await
+    }
+    async fn version(&self) -> Result<Value> {
+        self.version().await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
 }
 
 impl TabApi for Tab {
-    fn target_id(&self) -> &str { self.target_id() }
-    async fn navigate(&self, url: &str) -> Result<()> { self.navigate(url).await }
-    async fn evaluate(&self, expr: &str) -> Result<JsResult> { self.evaluate(expr).await }
-    async fn inject_preload_script(&self, src: &str) -> Result<()> { self.inject_preload_script(src).await }
-    async fn inject_on_navigate(&self, src: &str) -> Result<()> { self.inject_on_navigate(src).await }
-    async fn url(&self) -> Result<String> { self.url().await }
-    async fn title(&self) -> Result<String> { self.title().await }
-    async fn set_bounds(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> { self.set_bounds(x, y, w, h).await }
-    async fn close(self) -> Result<()> { self.close().await }
+    fn target_id(&self) -> &str {
+        self.target_id()
+    }
+    async fn navigate(&self, url: &str) -> Result<()> {
+        self.navigate(url).await
+    }
+    async fn evaluate(&self, expr: &str) -> Result<JsResult> {
+        self.evaluate(expr).await
+    }
+    async fn inject_preload_script(&self, src: &str) -> Result<()> {
+        self.inject_preload_script(src).await
+    }
+    async fn inject_on_navigate(&self, src: &str) -> Result<()> {
+        self.inject_on_navigate(src).await
+    }
+    async fn url(&self) -> Result<String> {
+        self.url().await
+    }
+    async fn title(&self) -> Result<String> {
+        self.title().await
+    }
+    async fn set_bounds(&self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        self.set_bounds(x, y, w, h).await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
 }
 
 async fn wait_for_chrome(port: u16) -> Result<String> {

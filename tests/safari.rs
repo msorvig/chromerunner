@@ -76,7 +76,11 @@ async fn test_list_targets() {
     browser.new_tab("about:blank").await.unwrap();
 
     let targets = browser.list_targets().await.unwrap();
-    assert!(targets.len() >= 2, "expected >=2 targets, got {}", targets.len());
+    assert!(
+        targets.len() >= 2,
+        "expected >=2 targets, got {}",
+        targets.len()
+    );
 
     browser.close().await.unwrap();
 }

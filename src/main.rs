@@ -4,7 +4,10 @@ use tracing_subscriber::EnvFilter;
 use chromerunner::{BrowserApi, TabApi};
 
 #[derive(Parser)]
-#[command(name = "chromerunner", about = "Browser automation via CDP / BiDi / WebDriver")]
+#[command(
+    name = "chromerunner",
+    about = "Browser automation via CDP / BiDi / WebDriver"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -243,9 +246,7 @@ async fn run_demo<B: BrowserApi>(headless: bool, pause: bool) -> anyhow::Result<
     // 6. Evaluate JS in each window
     println!("\n5. Evaluating JavaScript in each window...");
     for (i, win) in windows.iter().enumerate() {
-        let result = win
-            .evaluate(&format!("'Hello from window {}'", i))
-            .await?;
+        let result = win.evaluate(&format!("'Hello from window {}'", i)).await?;
         println!("   [{}] {}", i, result.value);
     }
 

@@ -27,11 +27,16 @@ struct Shared {
     events: broadcast::Sender<CdpEvent>,
 }
 
+/// Command response timeout. Generous by default: instantiating a large debug
+/// wasm module, especially a dynamically linked one, can take a minute or more.
+const DEFAULT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Low-level CDP client over a single WebSocket connection.
 pub struct CdpClient {
     shared: Arc<Shared>,
     writer: Mutex<WsWriter>,
     next_id: AtomicU64,
+    command_timeout: std::time::Duration,
     _read_task: tokio::task::JoinHandle<()>,
 }
 
@@ -57,11 +62,17 @@ impl CdpClient {
             shared,
             writer: Mutex::new(write_half),
             next_id: AtomicU64::new(1),
+            command_timeout: DEFAULT_COMMAND_TIMEOUT,
             _read_task: read_task,
         })
     }
 
-    /// Send a CDP command and wait for the response (up to 30 s).
+    /// Set how long to wait for a command response.
+    pub fn set_command_timeout(&mut self, timeout: std::time::Duration) {
+        self.command_timeout = timeout;
+    }
+
+    /// Send a CDP command and wait for the response.
     pub async fn send(
         &self,
         method: &str,
@@ -94,7 +105,7 @@ impl CdpClient {
             .await
             .map_err(|e| Error::WebSocket(e.to_string()))?;
 
-        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        match tokio::time::timeout(self.command_timeout, rx).await {
             Ok(Ok(result)) => {
                 debug!(id, method, "CDP response ok");
                 let value = result?;
@@ -104,7 +115,10 @@ impl CdpClient {
             Ok(Err(_)) => Err(Error::Other("response channel closed".into())),
             Err(_) => {
                 warn!(id, method, "CDP command timed out");
-                Err(Error::Timeout("CDP command timed out after 30s".into()))
+                Err(Error::Timeout(format!(
+                    "CDP command timed out after {:?}",
+                    self.command_timeout
+                )))
             }
         }
     }
@@ -139,10 +153,7 @@ impl CdpClient {
                         let mut pending = shared.pending.lock().await;
                         if let Some(sender) = pending.remove(&id) {
                             if let Some(error) = value.get("error") {
-                                let code = error
-                                    .get("code")
-                                    .and_then(|c| c.as_i64())
-                                    .unwrap_or(0);
+                                let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                                 let message = error
                                     .get("message")
                                     .and_then(|m| m.as_str())
@@ -156,22 +167,16 @@ impl CdpClient {
                                     data,
                                 }));
                             } else {
-                                let result =
-                                    value.get("result").cloned().unwrap_or(Value::Null);
+                                let result = value.get("result").cloned().unwrap_or(Value::Null);
                                 let _ = sender.send(Ok(result));
                             }
                         }
-                    } else if let Some(method) =
-                        value.get("method").and_then(|m| m.as_str())
-                    {
+                    } else if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
                         debug!(method, "CDP event");
                         trace!(event = %value, "CDP event raw");
                         let event = CdpEvent {
                             method: method.to_string(),
-                            params: value
-                                .get("params")
-                                .cloned()
-                                .unwrap_or(Value::Null),
+                            params: value.get("params").cloned().unwrap_or(Value::Null),
                             session_id: value
                                 .get("sessionId")
                                 .and_then(|s| s.as_str())

@@ -60,9 +60,7 @@ pub trait BrowserApi: Sized {
     ///
     /// If `headless` is `true`, the browser runs without a visible window
     /// (not supported by Safari — the parameter is accepted but ignored).
-    fn launch(
-        headless: bool,
-    ) -> impl std::future::Future<Output = Result<Self>> + Send;
+    fn launch(headless: bool) -> impl std::future::Future<Output = Result<Self>> + Send;
 
     /// Launch with additional browser-specific command-line arguments.
     ///
@@ -78,21 +76,13 @@ pub trait BrowserApi: Sized {
     ) -> impl std::future::Future<Output = Result<Self>> + Send;
 
     /// Open a new tab and navigate to `url`.
-    fn new_tab(
-        &self,
-        url: &str,
-    ) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
+    fn new_tab(&self, url: &str) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
 
     /// Open a new window and navigate to `url`.
-    fn new_window(
-        &self,
-        url: &str,
-    ) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
+    fn new_window(&self, url: &str) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
 
     /// List all targets / browsing contexts.
-    fn list_targets(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Vec<TargetInfo>>> + Send;
+    fn list_targets(&self) -> impl std::future::Future<Output = Result<Vec<TargetInfo>>> + Send;
 
     /// Get browser version information.
     fn version(&self) -> impl std::future::Future<Output = Result<Value>> + Send;
@@ -109,10 +99,7 @@ pub trait TabApi: Sized {
     fn target_id(&self) -> &str;
 
     /// Navigate to `url` and wait for the page to load.
-    fn navigate(
-        &self,
-        url: &str,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn navigate(&self, url: &str) -> impl std::future::Future<Output = Result<()>> + Send;
 
     /// Evaluate a JavaScript expression and return the result.
     ///
