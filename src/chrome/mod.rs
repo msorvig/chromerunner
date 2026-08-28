@@ -18,7 +18,7 @@ use tracing::{debug, info};
 use crate::error::{Error, Result};
 use crate::launcher;
 use crate::transport::http;
-use crate::types::{BrowserApi, JsResult, TabApi, TargetInfo};
+use crate::types::{BrowserApi, ContextApi, JsResult, TabApi, TargetInfo};
 use cdp::{CdpClient, CdpEvent};
 use tokio::sync::broadcast;
 
@@ -107,49 +107,124 @@ impl Browser {
         &self.cdp
     }
 
-    async fn create_target(&self, url: &str, new_window: bool) -> Result<Tab> {
-        let mut params = json!({ "url": url });
-        if new_window {
-            params["newWindow"] = json!(true);
-        }
-        let result = self.cdp.send("Target.createTarget", params, None).await?;
-        let target_id = result["targetId"]
-            .as_str()
-            .ok_or_else(|| Error::Other("no targetId".into()))?
-            .to_string();
-
-        let attach = self
+    /// Create an isolated browser context.
+    ///
+    /// Tabs opened from the returned [`BrowserContext`] get their own
+    /// cookie jar, storage, and cache, isolated from the default context and
+    /// from every other context. This is CDP's incognito context
+    /// (`Target.createBrowserContext`) — it costs no extra process, so it is
+    /// far cheaper than launching a second browser to get isolation.
+    pub async fn new_context(&self) -> Result<BrowserContext> {
+        let result = self
             .cdp
+            .send("Target.createBrowserContext", json!({}), None)
+            .await?;
+        let id = result["browserContextId"]
+            .as_str()
+            .ok_or_else(|| Error::Other("no browserContextId".into()))?
+            .to_string();
+        debug!(context_id = %id, "Chrome: created browser context");
+        Ok(BrowserContext {
+            id,
+            cdp: self.cdp.clone(),
+        })
+    }
+
+    async fn create_target(&self, url: &str, new_window: bool) -> Result<Tab> {
+        create_target(&self.cdp, url, new_window, None).await
+    }
+}
+
+/// An isolated browser context — its own cookies, storage, and cache.
+///
+/// Created by [`Browser::new_context`]. Dropping the handle leaves the
+/// context (and any tabs still open in it) alive until the browser exits;
+/// call [`close`](Self::close) to dispose of it eagerly.
+pub struct BrowserContext {
+    id: String,
+    cdp: Arc<CdpClient>,
+}
+
+impl BrowserContext {
+    /// The CDP `browserContextId`.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Open a new tab inside this context.
+    pub async fn new_tab(&self, url: &str) -> Result<Tab> {
+        create_target(&self.cdp, url, false, Some(&self.id)).await
+    }
+
+    /// Open a new window inside this context.
+    pub async fn new_window(&self, url: &str) -> Result<Tab> {
+        create_target(&self.cdp, url, true, Some(&self.id)).await
+    }
+
+    /// Dispose of the context, closing every tab still open in it and
+    /// discarding its cookies and storage.
+    pub async fn close(self) -> Result<()> {
+        debug!(context_id = %self.id, "Chrome: disposing browser context");
+        self.cdp
             .send(
-                "Target.attachToTarget",
-                json!({ "targetId": target_id, "flatten": true }),
+                "Target.disposeBrowserContext",
+                json!({ "browserContextId": self.id }),
                 None,
             )
             .await?;
-        let session_id = attach["sessionId"]
-            .as_str()
-            .ok_or_else(|| Error::Other("no sessionId".into()))?
-            .to_string();
-
-        let tab = Tab {
-            target_id,
-            session_id,
-            cdp: self.cdp.clone(),
-            on_navigate_scripts: std::sync::Mutex::new(Vec::new()),
-        };
-        // A fresh target starts at about:blank, whose readyState is already
-        // "complete", so a plain readyState poll can declare the tab loaded
-        // before the requested navigation ever commits -- and right after a
-        // cold launch Chrome occasionally drops that initial navigation
-        // altogether, leaving the tab blank forever. Wait for the requested
-        // document instead, re-issuing the navigation if it went missing.
-        if url == "about:blank" {
-            tab.wait_for_load().await?;
-        } else {
-            tab.wait_for_initial_navigation(url).await?;
-        }
-        Ok(tab)
+        Ok(())
     }
+}
+
+async fn create_target(
+    cdp: &Arc<CdpClient>,
+    url: &str,
+    new_window: bool,
+    browser_context_id: Option<&str>,
+) -> Result<Tab> {
+    let mut params = json!({ "url": url });
+    if new_window {
+        params["newWindow"] = json!(true);
+    }
+    if let Some(context_id) = browser_context_id {
+        params["browserContextId"] = json!(context_id);
+    }
+    let result = cdp.send("Target.createTarget", params, None).await?;
+    let target_id = result["targetId"]
+        .as_str()
+        .ok_or_else(|| Error::Other("no targetId".into()))?
+        .to_string();
+
+    let attach = cdp
+        .send(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+            None,
+        )
+        .await?;
+    let session_id = attach["sessionId"]
+        .as_str()
+        .ok_or_else(|| Error::Other("no sessionId".into()))?
+        .to_string();
+
+    let tab = Tab {
+        target_id,
+        session_id,
+        cdp: cdp.clone(),
+        on_navigate_scripts: std::sync::Mutex::new(Vec::new()),
+    };
+    // A fresh target starts at about:blank, whose readyState is already
+    // "complete", so a plain readyState poll can declare the tab loaded
+    // before the requested navigation ever commits -- and right after a
+    // cold launch Chrome occasionally drops that initial navigation
+    // altogether, leaving the tab blank forever. Wait for the requested
+    // document instead, re-issuing the navigation if it went missing.
+    if url == "about:blank" {
+        tab.wait_for_load().await?;
+    } else {
+        tab.wait_for_initial_navigation(url).await?;
+    }
+    Ok(tab)
 }
 
 /// Something the page said, as Chrome reports it.
@@ -514,6 +589,7 @@ impl Tab {
 
 impl BrowserApi for Browser {
     type Tab = Tab;
+    type Context = BrowserContext;
 
     async fn launch(headless: bool) -> Result<Self> {
         Self::launch(headless).await
@@ -527,11 +603,31 @@ impl BrowserApi for Browser {
     async fn new_window(&self, url: &str) -> Result<Tab> {
         self.new_window(url).await
     }
+    async fn new_context(&self) -> Result<BrowserContext> {
+        self.new_context().await
+    }
     async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
         self.list_targets().await
     }
     async fn version(&self) -> Result<Value> {
         self.version().await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
+}
+
+impl ContextApi for BrowserContext {
+    type Tab = Tab;
+
+    fn id(&self) -> &str {
+        self.id()
+    }
+    async fn new_tab(&self, url: &str) -> Result<Tab> {
+        self.new_tab(url).await
+    }
+    async fn new_window(&self, url: &str) -> Result<Tab> {
+        self.new_window(url).await
     }
     async fn close(self) -> Result<()> {
         self.close().await

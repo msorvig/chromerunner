@@ -56,6 +56,9 @@ pub trait BrowserApi: Sized {
     /// The tab type returned by this browser.
     type Tab: TabApi;
 
+    /// The isolated-context type returned by this browser.
+    type Context: ContextApi<Tab = Self::Tab>;
+
     /// Launch a new browser instance.
     ///
     /// If `headless` is `true`, the browser runs without a visible window
@@ -81,6 +84,16 @@ pub trait BrowserApi: Sized {
     /// Open a new window and navigate to `url`.
     fn new_window(&self, url: &str) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
 
+    /// Create an isolated browser context with its own cookies and storage.
+    ///
+    /// Supported on Chrome (CDP `Target.createBrowserContext`) and Firefox
+    /// 125+ (BiDi `browser.createUserContext`). Returns an error on Safari,
+    /// where WebDriver has no equivalent.
+    ///
+    /// Isolation without a second browser process — prefer this over
+    /// launching another browser when all you need is a clean cookie jar.
+    fn new_context(&self) -> impl std::future::Future<Output = Result<Self::Context>> + Send;
+
     /// List all targets / browsing contexts.
     fn list_targets(&self) -> impl std::future::Future<Output = Result<Vec<TargetInfo>>> + Send;
 
@@ -88,6 +101,42 @@ pub trait BrowserApi: Sized {
     fn version(&self) -> impl std::future::Future<Output = Result<Value>> + Send;
 
     /// Gracefully close the browser and clean up resources.
+    fn close(self) -> impl std::future::Future<Output = Result<()>> + Send;
+}
+
+/// Operations on an isolated browser context.
+///
+/// A context is a private cookie jar and storage partition inside one browser
+/// process. Tabs opened from two different contexts cannot see each other's
+/// cookies, `localStorage`, `sessionStorage`, or cache, which is the same
+/// isolation a second browser would give — without a second browser.
+///
+/// ```rust,no_run
+/// use chromerunner::{BrowserApi, ContextApi, TabApi};
+///
+/// async fn isolated_title(browser: &impl BrowserApi) -> chromerunner::Result<String> {
+///     let context = browser.new_context().await?;
+///     let tab = context.new_tab("https://example.com").await?;
+///     let title = tab.title().await?;
+///     context.close().await?;  // closes the tab and discards its cookies
+///     Ok(title)
+/// }
+/// ```
+pub trait ContextApi: Sized {
+    /// The tab type opened by this context.
+    type Tab: TabApi;
+
+    /// The backend's identifier for this context.
+    fn id(&self) -> &str;
+
+    /// Open a new tab inside this context and navigate to `url`.
+    fn new_tab(&self, url: &str) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
+
+    /// Open a new window inside this context and navigate to `url`.
+    fn new_window(&self, url: &str) -> impl std::future::Future<Output = Result<Self::Tab>> + Send;
+
+    /// Dispose of the context, closing every tab still open in it and
+    /// discarding its cookies and storage.
     fn close(self) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 

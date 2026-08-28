@@ -19,7 +19,7 @@ use tracing::{debug, info};
 use crate::error::{Error, Result};
 use crate::launcher;
 use crate::transport::http;
-use crate::types::{BrowserApi, JsResult, TabApi, TargetInfo};
+use crate::types::{BrowserApi, ContextApi, JsResult, TabApi, TargetInfo};
 use bidi::BidiClient;
 
 /// Firefox browser instance (via geckodriver + WebDriver BiDi).
@@ -173,30 +173,132 @@ impl Browser {
         &self.bidi
     }
 
-    async fn create_context(&self, ctx_type: &str, url: &str) -> Result<Tab> {
+    /// Create an isolated browser context.
+    ///
+    /// Tabs opened from the returned [`BrowserContext`] get their own
+    /// cookie jar and storage, isolated from the default context and from
+    /// every other context. This maps to a BiDi *user context*
+    /// (`browser.createUserContext`), which needs Firefox 125 or newer.
+    pub async fn new_context(&self) -> Result<BrowserContext> {
         let result = self
             .bidi
-            .send("browsingContext.create", json!({ "type": ctx_type }))
+            .send("browser.createUserContext", json!({}))
             .await?;
-        let context_id = result["context"]
+        let id = result["userContext"]
             .as_str()
-            .ok_or_else(|| Error::Other("no context in response".into()))?
+            .ok_or_else(|| Error::Other("no userContext in response".into()))?
             .to_string();
-
-        let tab = Tab {
-            context_id,
+        debug!(context_id = %id, "Firefox: created user context");
+        Ok(BrowserContext {
+            id,
             bidi: self.bidi.clone(),
             session_id: self.session_id.clone(),
             driver_port: self.driver_port,
-            on_navigate_scripts: std::sync::Mutex::new(Vec::new()),
-        };
-
-        if url != "about:blank" {
-            tab.navigate(url).await?;
-        }
-
-        Ok(tab)
+        })
     }
+
+    async fn create_context(&self, ctx_type: &str, url: &str) -> Result<Tab> {
+        create_context(
+            &self.bidi,
+            &self.session_id,
+            self.driver_port,
+            ctx_type,
+            url,
+            None,
+        )
+        .await
+    }
+}
+
+/// An isolated browser context — its own cookies and storage.
+///
+/// Created by [`Browser::new_context`]. Dropping the handle leaves the
+/// context alive until the browser exits; call [`close`](Self::close) to
+/// remove it eagerly.
+pub struct BrowserContext {
+    id: String,
+    bidi: Arc<BidiClient>,
+    session_id: String,
+    driver_port: u16,
+}
+
+impl BrowserContext {
+    /// The BiDi `userContext` id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Open a new tab inside this context.
+    pub async fn new_tab(&self, url: &str) -> Result<Tab> {
+        create_context(
+            &self.bidi,
+            &self.session_id,
+            self.driver_port,
+            "tab",
+            url,
+            Some(&self.id),
+        )
+        .await
+    }
+
+    /// Open a new window inside this context.
+    pub async fn new_window(&self, url: &str) -> Result<Tab> {
+        create_context(
+            &self.bidi,
+            &self.session_id,
+            self.driver_port,
+            "window",
+            url,
+            Some(&self.id),
+        )
+        .await
+    }
+
+    /// Remove the context, closing every tab still open in it and discarding
+    /// its cookies and storage.
+    pub async fn close(self) -> Result<()> {
+        debug!(context_id = %self.id, "Firefox: removing user context");
+        self.bidi
+            .send(
+                "browser.removeUserContext",
+                json!({ "userContext": self.id }),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+async fn create_context(
+    bidi: &Arc<BidiClient>,
+    session_id: &str,
+    driver_port: u16,
+    ctx_type: &str,
+    url: &str,
+    user_context: Option<&str>,
+) -> Result<Tab> {
+    let mut params = json!({ "type": ctx_type });
+    if let Some(user_context) = user_context {
+        params["userContext"] = json!(user_context);
+    }
+    let result = bidi.send("browsingContext.create", params).await?;
+    let context_id = result["context"]
+        .as_str()
+        .ok_or_else(|| Error::Other("no context in response".into()))?
+        .to_string();
+
+    let tab = Tab {
+        context_id,
+        bidi: bidi.clone(),
+        session_id: session_id.to_string(),
+        driver_port,
+        on_navigate_scripts: std::sync::Mutex::new(Vec::new()),
+    };
+
+    if url != "about:blank" {
+        tab.navigate(url).await?;
+    }
+
+    Ok(tab)
 }
 
 impl Tab {
@@ -321,6 +423,7 @@ impl Tab {
 
 impl BrowserApi for Browser {
     type Tab = Tab;
+    type Context = BrowserContext;
 
     async fn launch(headless: bool) -> Result<Self> {
         Self::launch(headless).await
@@ -334,11 +437,31 @@ impl BrowserApi for Browser {
     async fn new_window(&self, url: &str) -> Result<Tab> {
         self.new_window(url).await
     }
+    async fn new_context(&self) -> Result<BrowserContext> {
+        self.new_context().await
+    }
     async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
         self.list_targets().await
     }
     async fn version(&self) -> Result<Value> {
         self.version().await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
+}
+
+impl ContextApi for BrowserContext {
+    type Tab = Tab;
+
+    fn id(&self) -> &str {
+        self.id()
+    }
+    async fn new_tab(&self, url: &str) -> Result<Tab> {
+        self.new_tab(url).await
+    }
+    async fn new_window(&self, url: &str) -> Result<Tab> {
+        self.new_window(url).await
     }
     async fn close(self) -> Result<()> {
         self.close().await

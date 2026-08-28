@@ -514,3 +514,105 @@ async fn test_raw_cdp_target_info() {
 
     browser.close().await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Isolated browser contexts
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_context_isolates_localstorage() {
+    let base_url = start_local_server().await;
+    let browser = launch().await;
+
+    let ctx_a = browser.new_context().await.unwrap();
+    let ctx_b = browser.new_context().await.unwrap();
+    assert_ne!(ctx_a.id(), ctx_b.id());
+
+    let tab_a = ctx_a.new_tab(&base_url).await.unwrap();
+    let tab_b = ctx_b.new_tab(&base_url).await.unwrap();
+
+    tab_a
+        .evaluate("localStorage.setItem('k', 'from_a')")
+        .await
+        .unwrap();
+
+    // Same origin, different context: must not see it.
+    let seen_by_b = tab_b.evaluate("localStorage.getItem('k')").await.unwrap();
+    assert_eq!(seen_by_b.value, serde_json::json!(null));
+
+    // The default context must not see it either.
+    let default_tab = browser.new_tab(&base_url).await.unwrap();
+    let seen_by_default = default_tab
+        .evaluate("localStorage.getItem('k')")
+        .await
+        .unwrap();
+    assert_eq!(seen_by_default.value, serde_json::json!(null));
+
+    // A second tab in the *same* context does see it.
+    let tab_a2 = ctx_a.new_tab(&base_url).await.unwrap();
+    let seen_by_a2 = tab_a2.evaluate("localStorage.getItem('k')").await.unwrap();
+    assert_eq!(seen_by_a2.value, serde_json::json!("from_a"));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_context_isolates_cookies() {
+    let base_url = start_local_server().await;
+    let browser = launch().await;
+
+    let ctx_a = browser.new_context().await.unwrap();
+    let ctx_b = browser.new_context().await.unwrap();
+
+    let tab_a = ctx_a.new_tab(&base_url).await.unwrap();
+    let tab_b = ctx_b.new_tab(&base_url).await.unwrap();
+
+    tab_a
+        .evaluate("document.cookie = 'session=aaa; path=/'")
+        .await
+        .unwrap();
+
+    let in_a = tab_a.evaluate("document.cookie").await.unwrap();
+    assert_eq!(in_a.value, serde_json::json!("session=aaa"));
+
+    let in_b = tab_b.evaluate("document.cookie").await.unwrap();
+    assert_eq!(in_b.value, serde_json::json!(""));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_context_close_disposes_tabs() {
+    let base_url = start_local_server().await;
+    let browser = launch().await;
+
+    let ctx = browser.new_context().await.unwrap();
+    let tab = ctx.new_tab(&base_url).await.unwrap();
+    let target_id = tab.target_id().to_string();
+
+    let targets = browser.list_targets().await.unwrap();
+    assert!(targets.iter().any(|t| t.target_id == target_id));
+
+    ctx.close().await.unwrap();
+
+    let targets = browser.list_targets().await.unwrap();
+    assert!(
+        !targets.iter().any(|t| t.target_id == target_id),
+        "tab survived its context being disposed"
+    );
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_context_new_window() {
+    let browser = launch().await;
+
+    let ctx = browser.new_context().await.unwrap();
+    let window = ctx.new_window("about:blank").await.unwrap();
+    let r = window.evaluate("1 + 1").await.unwrap();
+    assert_eq!(r.value, serde_json::json!(2));
+
+    ctx.close().await.unwrap();
+    browser.close().await.unwrap();
+}

@@ -26,7 +26,7 @@ use tracing::{debug, info};
 use crate::error::{Error, Result};
 use crate::launcher;
 use crate::transport::http;
-use crate::types::{BrowserApi, JsResult, TabApi, TargetInfo};
+use crate::types::{BrowserApi, ContextApi, JsResult, TabApi, TargetInfo};
 
 /// Safari browser instance (via safaridriver).
 pub struct Browser {
@@ -158,6 +158,18 @@ impl Browser {
         Ok(())
     }
 
+    /// Isolated browser contexts are not available on Safari.
+    ///
+    /// WebDriver Classic has no equivalent of CDP browser contexts or BiDi
+    /// user contexts, and safaridriver allows only one session at a time, so
+    /// there is no way to get a second cookie jar out of one Safari. Always
+    /// returns an error.
+    pub async fn new_context(&self) -> Result<BrowserContext> {
+        Err(Error::Other(
+            "isolated contexts not supported on Safari (no WebDriver equivalent)".into(),
+        ))
+    }
+
     async fn create_window(&self, win_type: &str, url: &str) -> Result<Tab> {
         let resp = http::post_json(
             "127.0.0.1",
@@ -186,6 +198,35 @@ impl Browser {
         }
 
         Ok(tab)
+    }
+}
+
+/// Isolated browser context — **not constructible on Safari**.
+///
+/// This type exists only so Safari can implement [`BrowserApi`] alongside the
+/// other backends. [`Browser::new_context`] always fails, so no value of this
+/// type ever comes into existence.
+pub enum BrowserContext {}
+
+impl BrowserContext {
+    /// Unreachable — see the type-level docs.
+    pub fn id(&self) -> &str {
+        match *self {}
+    }
+
+    /// Unreachable — see the type-level docs.
+    pub async fn new_tab(&self, _url: &str) -> Result<Tab> {
+        match *self {}
+    }
+
+    /// Unreachable — see the type-level docs.
+    pub async fn new_window(&self, _url: &str) -> Result<Tab> {
+        match *self {}
+    }
+
+    /// Unreachable — see the type-level docs.
+    pub async fn close(self) -> Result<()> {
+        match self {}
     }
 }
 
@@ -339,6 +380,7 @@ impl Tab {
 
 impl BrowserApi for Browser {
     type Tab = Tab;
+    type Context = BrowserContext;
 
     async fn launch(headless: bool) -> Result<Self> {
         Self::launch(headless).await
@@ -352,11 +394,31 @@ impl BrowserApi for Browser {
     async fn new_window(&self, url: &str) -> Result<Tab> {
         self.new_window(url).await
     }
+    async fn new_context(&self) -> Result<BrowserContext> {
+        self.new_context().await
+    }
     async fn list_targets(&self) -> Result<Vec<TargetInfo>> {
         self.list_targets().await
     }
     async fn version(&self) -> Result<Value> {
         self.version().await
+    }
+    async fn close(self) -> Result<()> {
+        self.close().await
+    }
+}
+
+impl ContextApi for BrowserContext {
+    type Tab = Tab;
+
+    fn id(&self) -> &str {
+        self.id()
+    }
+    async fn new_tab(&self, url: &str) -> Result<Tab> {
+        self.new_tab(url).await
+    }
+    async fn new_window(&self, url: &str) -> Result<Tab> {
+        self.new_window(url).await
     }
     async fn close(self) -> Result<()> {
         self.close().await

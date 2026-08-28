@@ -57,6 +57,11 @@ println!("status: {}", r.value);  // promises are awaited automatically
 // Position windows
 window.set_bounds(0, 0, 800, 600).await?;
 
+// Isolated contexts: own cookies and storage, same browser process
+let context = browser.new_context().await?;
+let clean_tab = context.new_tab("https://example.com").await?;
+context.close().await?;  // closes its tabs, discards its cookies
+
 // Inject a script that runs after every navigate (all browsers)
 tab1.inject_on_navigate("window.__ready = true").await?;
 tab1.navigate("https://example.com").await?;
@@ -106,6 +111,10 @@ All three backends implement `BrowserApi` and `TabApi`:
 | `Browser::launch_with_args(headless, args)` | Yes | Yes | Yes | Safari warns and ignores args |
 | `Browser::new_tab(url)` | Yes | Yes | Yes | |
 | `Browser::new_window(url)` | Yes | Yes | Yes | |
+| `Browser::new_context()` | Yes | Yes | Error | Isolated cookies / storage |
+| `BrowserContext::new_tab(url)` | Yes | Yes | — | |
+| `BrowserContext::new_window(url)` | Yes | Yes | — | |
+| `BrowserContext::close()` | Yes | Yes | — | Closes its tabs |
 | `Browser::list_targets()` | Yes | Yes | Yes | Safari returns handles only |
 | `Browser::version()` | Yes | Yes | Yes | |
 | `Browser::close()` | Yes | Yes | Yes | |
@@ -117,6 +126,55 @@ All three backends implement `BrowserApi` and `TabApi`:
 | `Tab::title()` | Yes | Yes | Yes | |
 | `Tab::set_bounds(x,y,w,h)` | Yes | Yes | Yes | |
 | `Tab::close()` | Yes | Yes | Yes | |
+
+## Isolation
+
+Tabs from `Browser::new_tab` share one cookie jar and one `localStorage`. When
+you need page loads that cannot see each other — parallel scrapes, separate
+logins, a clean slate per test — use an isolated context rather than a second
+browser:
+
+```rust
+let browser = chrome::Browser::launch(true).await?;
+
+let alice = browser.new_context().await?;
+let bob = browser.new_context().await?;
+
+let alice_tab = alice.new_tab("https://example.com").await?;
+let bob_tab = bob.new_tab("https://example.com").await?;
+// alice_tab and bob_tab share no cookies, storage, or cache.
+
+alice.close().await?;  // closes its tabs and discards its cookies
+```
+
+- **Chrome**: CDP `Target.createBrowserContext` (an incognito context).
+- **Firefox**: BiDi `browser.createUserContext`, needs Firefox 125 or newer.
+- **Safari**: not available — `new_context()` returns an error. WebDriver has
+  no equivalent and safaridriver allows one session at a time.
+
+Dropping a `BrowserContext` handle leaves the context alive until the browser
+exits; `close()` disposes of it eagerly.
+
+### Cost
+
+Measured on a 24-core Linux box, 128 concurrent units, each loading a page
+over localhost and touching `localStorage` (`tests/scaling.rs`):
+
+| Approach | Wall time | Per unit | Processes |
+|---|---|---|---|
+| Tabs in one browser (no isolation) | 1.4 s | 10.7 ms | ~15 |
+| Isolated contexts in one browser | 5.3 s | 41.6 ms | ~15 |
+| One browser per unit | 7.5 s | 58.9 ms | ~1550 |
+
+Isolation is roughly 30 ms per unit on top of a plain tab, and unlike plain
+tabs that cost does not amortise — context create and dispose are handled by
+Chrome's browser process one at a time, so contexts top out near 25/s no
+matter how many threads you throw at them. It is still cheaper than a browser
+per unit, and the process and memory footprint is not close: a hundred
+contexts add no processes, a hundred browsers add about twelve each.
+
+Nothing failed at any width up to 128 in either mode, so the practical limit
+is memory, not concurrency.
 
 ## Browser differences
 

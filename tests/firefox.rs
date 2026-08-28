@@ -132,3 +132,84 @@ async fn test_list_targets() {
 
     browser.close().await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Isolated browser contexts (BiDi user contexts)
+// ---------------------------------------------------------------------------
+
+/// Start a minimal localhost HTTP server and return its base URL.
+/// localStorage and cookies need a real origin, so `about:blank` won't do.
+async fn start_local_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+                    let body = "<html><body></body></html>";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\
+                         Content-Type: text/html\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                });
+            }
+        }
+    });
+    format!("http://127.0.0.1:{}", port)
+}
+
+#[tokio::test]
+async fn test_context_isolates_localstorage() {
+    let base_url = start_local_server().await;
+    let browser = launch().await;
+
+    let ctx_a = browser.new_context().await.unwrap();
+    let ctx_b = browser.new_context().await.unwrap();
+    assert_ne!(ctx_a.id(), ctx_b.id());
+
+    let tab_a = ctx_a.new_tab(&base_url).await.unwrap();
+    let tab_b = ctx_b.new_tab(&base_url).await.unwrap();
+
+    tab_a
+        .evaluate("localStorage.setItem('k', 'from_a')")
+        .await
+        .unwrap();
+
+    let seen_by_b = tab_b.evaluate("localStorage.getItem('k')").await.unwrap();
+    assert_eq!(seen_by_b.value, serde_json::json!(null));
+
+    let tab_a2 = ctx_a.new_tab(&base_url).await.unwrap();
+    let seen_by_a2 = tab_a2.evaluate("localStorage.getItem('k')").await.unwrap();
+    assert_eq!(seen_by_a2.value, serde_json::json!("from_a"));
+
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_context_close_removes_tabs() {
+    let base_url = start_local_server().await;
+    let browser = launch().await;
+
+    let ctx = browser.new_context().await.unwrap();
+    let tab = ctx.new_tab(&base_url).await.unwrap();
+    let context_id = tab.target_id().to_string();
+
+    let targets = browser.list_targets().await.unwrap();
+    assert!(targets.iter().any(|t| t.target_id == context_id));
+
+    ctx.close().await.unwrap();
+
+    let targets = browser.list_targets().await.unwrap();
+    assert!(
+        !targets.iter().any(|t| t.target_id == context_id),
+        "tab survived its user context being removed"
+    );
+
+    browser.close().await.unwrap();
+}

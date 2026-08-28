@@ -70,6 +70,11 @@
 //! // Position windows
 //! window.set_bounds(0, 0, 800, 600).await?;
 //!
+//! // Isolated contexts: own cookies and storage, same browser process
+//! let context = browser.new_context().await?;
+//! let clean_tab = context.new_tab("https://example.com").await?;
+//! context.close().await?;  // closes its tabs, discards its cookies
+//!
 //! // Inject a script that runs after every navigate (all browsers)
 //! tab1.inject_on_navigate("window.__ready = true").await?;
 //! tab1.navigate("https://example.com").await?;
@@ -83,6 +88,19 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ### Isolation
+//!
+//! Tabs from [`Browser::new_tab`](chrome::Browser::new_tab) share one cookie
+//! jar and one `localStorage`. For page loads that must not see each other —
+//! parallel scrapes, separate logins, a clean slate per test — open an
+//! isolated context instead of a second browser. It is a private cookie jar
+//! and storage partition inside the same process, so it costs no extra
+//! browser: a hundred contexts add no processes, a hundred browsers add about
+//! twelve each. See `tests/scaling.rs` for the measurements.
+//!
+//! Chrome uses a CDP browser context, Firefox 125+ a BiDi user context;
+//! Safari has no equivalent and returns an error.
 //!
 //! ### Cross-browser generic code
 //!
@@ -99,13 +117,17 @@
 //!
 //! ## API surface
 //!
-//! All three backends implement [`BrowserApi`] and [`TabApi`]:
+//! All three backends implement [`BrowserApi`], [`ContextApi`], and [`TabApi`]:
 //!
 //! | Method | Chrome | Firefox | Safari | Notes |
 //! |--------|:------:|:-------:|:------:|-------|
 //! | `Browser::launch(headless)` | Yes | Yes | Yes | Safari ignores `headless` |
 //! | `Browser::new_tab(url)` | Yes | Yes | Yes | |
 //! | `Browser::new_window(url)` | Yes | Yes | Yes | |
+//! | `Browser::new_context()` | Yes | Yes | Error | Isolated cookies / storage |
+//! | `BrowserContext::new_tab(url)` | Yes | Yes | — | |
+//! | `BrowserContext::new_window(url)` | Yes | Yes | — | |
+//! | `BrowserContext::close()` | Yes | Yes | — | Closes its tabs |
 //! | `Browser::list_targets()` | Yes | Yes | Yes | Safari returns handles only (no title/url) |
 //! | `Browser::version()` | Yes | Yes | Yes | |
 //! | `Browser::close()` | Yes | Yes | Yes | |
@@ -206,10 +228,10 @@ pub mod safari;
 
 // Re-export shared types and traits at crate root
 pub use error::{Error, Result};
-pub use types::{BrowserApi, JsResult, TabApi, TargetInfo};
+pub use types::{BrowserApi, ContextApi, JsResult, TabApi, TargetInfo};
 
 // Backward-compatible re-exports: chrome types at crate root
 #[cfg(feature = "chrome")]
 pub use chrome::cdp::{CdpClient, CdpEvent};
 #[cfg(feature = "chrome")]
-pub use chrome::{Browser, Tab};
+pub use chrome::{Browser, BrowserContext, Tab};
