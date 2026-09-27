@@ -16,6 +16,7 @@ serde_json = "1"
 thiserror = "1"
 tempfile = "3"
 tracing = "0.1"
+base64 = "0.22"
 
 # WebSocket support — pulled in by chrome and/or firefox features
 fastwebsockets = { version = "0.10", features = ["upgrade", "unstable-split"], optional = true }

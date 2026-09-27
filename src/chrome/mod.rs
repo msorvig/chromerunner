@@ -467,6 +467,25 @@ impl Tab {
         Ok(())
     }
 
+    /// Capture the visible viewport as PNG bytes.
+    pub async fn screenshot(&self) -> Result<Vec<u8>> {
+        use base64::Engine;
+        let r = self
+            .cdp
+            .send(
+                "Page.captureScreenshot",
+                json!({ "format": "png" }),
+                Some(&self.session_id),
+            )
+            .await?;
+        let data = r["data"]
+            .as_str()
+            .ok_or_else(|| Error::Other("no screenshot data".into()))?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| Error::Other(format!("screenshot decode: {e}")))
+    }
+
     pub async fn close(self) -> Result<()> {
         self.cdp
             .send(
@@ -665,7 +684,7 @@ impl TabApi for Tab {
 }
 
 async fn wait_for_chrome(port: u16) -> Result<String> {
-    for _ in 0..100 {
+    for _ in 0..600 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         if let Ok(json) = http::get_json("127.0.0.1", port, "/json/version").await {
             if let Some(url) = json["webSocketDebuggerUrl"].as_str() {
@@ -673,5 +692,5 @@ async fn wait_for_chrome(port: u16) -> Result<String> {
             }
         }
     }
-    Err(Error::Timeout("Chrome did not start within 5s".into()))
+    Err(Error::Timeout("Chrome did not start within 30s".into()))
 }

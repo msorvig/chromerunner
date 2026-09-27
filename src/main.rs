@@ -3,6 +3,9 @@ use tracing_subscriber::EnvFilter;
 
 use chromerunner::{BrowserApi, TabApi};
 
+#[cfg(feature = "chrome")]
+mod run;
+
 #[derive(Parser)]
 #[command(
     name = "chromerunner",
@@ -61,6 +64,9 @@ enum Commands {
         #[arg(long)]
         pause: bool,
     },
+    /// Open a page, stream its console, wait for a condition, screenshot (Chrome only)
+    #[cfg(feature = "chrome")]
+    Run(run::RunArgs),
 }
 
 #[tokio::main]
@@ -74,6 +80,12 @@ async fn main() -> anyhow::Result<()> {
             .with_env_filter(filter)
             .with_target(true)
             .init();
+    }
+
+    #[cfg(feature = "chrome")]
+    if let Commands::Run(_) = &cli.command {
+        let Commands::Run(args) = cli.command else { unreachable!() };
+        return run::run(cli.headless, args).await;
     }
 
     match cli.browser {
@@ -171,6 +183,8 @@ async fn run<B: BrowserApi>(cli: Cli) -> anyhow::Result<()> {
         Commands::Demo { pause } => {
             run_demo::<B>(cli.headless, pause).await?;
         }
+        #[cfg(feature = "chrome")]
+        Commands::Run(_) => unreachable!(),
     }
     Ok(())
 }
