@@ -56,7 +56,10 @@ pub struct RunArgs {
 
     /// Device scale factor (window.devicePixelRatio) to emulate, default 1.
     /// The page can change size and scale while running by logging
-    /// "AGENTEMU:<W>x<H>@<DPR>" to the console.
+    /// "AGENTEMU:<W>x<H>@<DPR>" to the console, and emulate CSS media
+    /// features by logging "AGENTMEDIA:<name>=<value>,..." (e.g.
+    /// "AGENTMEDIA:color-gamut=p3,dynamic-range=high"; "AGENTMEDIA:" resets),
+    /// and click by logging "AGENTCLICK:<x>,<y>" (CSS pixels, trusted events).
     #[arg(long)]
     pub dpr: Option<f64>,
 
@@ -191,6 +194,14 @@ async fn drive(browser: &Browser, url: &str, args: &RunArgs) -> anyhow::Result<(
                         let spec = text[i + 9..].split_whitespace().next().unwrap_or("").to_string();
                         let _ = emu_tx.send(spec);
                     }
+                    if let Some(i) = text.find("AGENTCLICK:") {
+                        let spec = text[i + 11..].split_whitespace().next().unwrap_or("").to_string();
+                        let _ = emu_tx.send(format!("@click {spec}"));
+                    }
+                    if let Some(i) = text.find("AGENTMEDIA:") {
+                        let spec = text[i + 11..].split_whitespace().next().unwrap_or("").to_string();
+                        let _ = emu_tx.send(format!("@media {spec}"));
+                    }
                     if let Some(n) = &needle {
                         if text.contains(n.as_str()) {
                             matched.store(true, Ordering::SeqCst);
@@ -220,6 +231,33 @@ async fn drive(browser: &Browser, url: &str, args: &RunArgs) -> anyhow::Result<(
     let mut ok = !has_condition;
     loop {
         while let Ok(spec) = emu_rx.try_recv() {
+            if let Some(at) = spec.strip_prefix("@click ") {
+                // <x>,<y> in CSS pixels: a trusted left click (press + release)
+                match at.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))) {
+                    Some((x, y)) => {
+                        for kind in ["mousePressed", "mouseReleased"] {
+                            cdp.send("Input.dispatchMouseEvent",
+                                json!({ "type": kind, "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1 }),
+                                Some(&sid)).await?;
+                        }
+                        eprintln!("[chromerunner] click {x},{y}");
+                    }
+                    None => eprintln!("[chromerunner] bad AGENTCLICK spec '{at}', want <x>,<y>"),
+                }
+                continue;
+            }
+            if let Some(media) = spec.strip_prefix("@media ") {
+                // <name>=<value>,... ; empty resets all emulated features
+                let features: Vec<_> = media
+                    .split(',')
+                    .filter_map(|kv| kv.split_once('='))
+                    .map(|(n, v)| json!({ "name": n, "value": v }))
+                    .collect();
+                cdp.send("Emulation.setEmulatedMedia", json!({ "features": features }), Some(&sid))
+                    .await?;
+                eprintln!("[chromerunner] emulating media {}", if media.is_empty() { "(reset)" } else { media });
+                continue;
+            }
             // <W>x<H>@<DPR>
             let parsed = spec.split_once('@').and_then(|(size, dpr)| {
                 let (w, h) = size.split_once('x')?;
